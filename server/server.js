@@ -27,6 +27,7 @@ const PORT = CONFIG.port;
 const STATIC_DIR = CONFIG.staticDir;
 
 let architectureData = null;
+let timelapseData = null;
 let lastUpdate = null;
 let sseClients = [];
 let broadcastDebounceTimer = null;
@@ -321,6 +322,44 @@ const server = http.createServer(async (req, res) => {
     const mermaidText = lines.join('\n');
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end(mermaidText);
+    return;
+  }
+
+  // GET /api/timelapse — return stored timelapse data
+  if (urlPath === '/api/timelapse' && req.method === 'GET') {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    sendJSON(res, 200, timelapseData || []);
+    return;
+  }
+
+  // POST /api/timelapse — accept and store timelapse snapshots, broadcast SSE
+  if (urlPath === '/api/timelapse' && req.method === 'POST') {
+    try {
+      const body = await readBody(req);
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        sendJSON(res, 400, { error: 'Request body is not valid JSON' });
+        return;
+      }
+
+      if (!Array.isArray(parsed)) {
+        sendJSON(res, 400, { error: 'Timelapse payload must be a JSON array' });
+        return;
+      }
+
+      timelapseData = deepSanitize(parsed);
+      lastUpdate = new Date().toISOString();
+      debouncedBroadcastSSE('timelapse_updated', timelapseData);
+      sendJSON(res, 200, { success: true, snapshots: timelapseData.length, lastUpdate });
+    } catch (err) {
+      if (err instanceof PayloadTooLargeError) {
+        sendJSON(res, 413, { error: err.message });
+      } else {
+        sendJSON(res, 400, { error: 'Invalid request' });
+      }
+    }
     return;
   }
 

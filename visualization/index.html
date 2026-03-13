@@ -12,6 +12,13 @@
   <div id="app">
     <div id="canvas-container">
       <canvas id="factory-canvas"></canvas>
+      <div id="timelapse-bar" style="display:none">
+        <div id="timelapse-controls">
+          <button id="timelapse-play" class="btn" style="width:auto;padding:4px 8px;font-size:6px;">&#9654;</button>
+          <input type="range" id="timelapse-slider" min="0" max="0" value="0" style="flex:1">
+          <span id="timelapse-commit" style="font-size:6px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;"></span>
+        </div>
+      </div>
     </div>
     <div id="panel">
       <div id="panel-header">
@@ -27,6 +34,10 @@
         <div class="status-row">
           <span style="color: var(--text-dim)">Last scan:</span>
           <span id="last-scan" style="color: var(--text-amber)">Never</span>
+        </div>
+        <div class="status-row">
+          <span style="color: var(--text-dim)">Mood:</span>
+          <span id="mood-status" style="color: var(--accent-green)">--</span>
         </div>
       </div>
 
@@ -110,6 +121,8 @@
 
   <script src="characters.js"></script>
   <script src="scenarios.js"></script>
+  <script src="mood.js"></script>
+  <script src="karma.js"></script>
   <script src="factory.js"></script>
   <script>
     (function() {
@@ -193,6 +206,15 @@
             loadArchitecture(data);
           } catch (err) {
             console.error('Failed to parse architecture update:', err);
+          }
+        });
+
+        eventSource.addEventListener('timelapse_updated', (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            loadTimelapse(data);
+          } catch (err) {
+            console.error('Failed to parse timelapse update:', err);
           }
         });
       }
@@ -363,6 +385,72 @@
       document.getElementById('dwell-slider').addEventListener('input', (e) => {
         if (window.setDwellSpeed) window.setDwellSpeed(parseInt(e.target.value));
       });
+
+      // ── Timelapse Controls ──
+      let timelapseSnapshots = [];
+      let timelapsePlayInterval = null;
+
+      function loadTimelapse(data) {
+        if (!Array.isArray(data) || data.length === 0) return;
+        timelapseSnapshots = data;
+        var bar = document.getElementById('timelapse-bar');
+        var slider = document.getElementById('timelapse-slider');
+        var commitLabel = document.getElementById('timelapse-commit');
+        bar.style.display = 'block';
+        slider.max = data.length - 1;
+        slider.value = 0;
+        // Load first snapshot
+        showTimelapseFrame(0);
+      }
+
+      function showTimelapseFrame(index) {
+        var snap = timelapseSnapshots[index];
+        if (!snap) return;
+        var commitLabel = document.getElementById('timelapse-commit');
+        commitLabel.textContent = snap.shortHash + ' — ' + (snap.message || '');
+        commitLabel.title = (snap.diff_from_previous && snap.diff_from_previous.narrative) || snap.message || '';
+        if (snap.architecture) {
+          loadArchitecture(snap.architecture);
+        }
+      }
+
+      document.getElementById('timelapse-slider').addEventListener('input', function(e) {
+        var idx = parseInt(e.target.value);
+        showTimelapseFrame(idx);
+      });
+
+      document.getElementById('timelapse-play').addEventListener('click', function() {
+        var btn = document.getElementById('timelapse-play');
+        var slider = document.getElementById('timelapse-slider');
+        if (timelapsePlayInterval) {
+          clearInterval(timelapsePlayInterval);
+          timelapsePlayInterval = null;
+          btn.innerHTML = '&#9654;';
+          return;
+        }
+        btn.innerHTML = '&#9724;';
+        timelapsePlayInterval = setInterval(function() {
+          var current = parseInt(slider.value);
+          if (current >= timelapseSnapshots.length - 1) {
+            clearInterval(timelapsePlayInterval);
+            timelapsePlayInterval = null;
+            btn.innerHTML = '&#9654;';
+            return;
+          }
+          slider.value = current + 1;
+          showTimelapseFrame(current + 1);
+        }, 2000);
+      });
+
+      // Fetch timelapse on initial load if available
+      fetch(API_BASE + '/api/timelapse')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (Array.isArray(data) && data.length > 0) {
+            loadTimelapse(data);
+          }
+        })
+        .catch(function() {});
 
       // ── Start connection ──
       connect();
