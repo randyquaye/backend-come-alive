@@ -22,7 +22,7 @@ Visualize any backend as a retro pixel-art factory with animated characters show
 | `/backend-factory:stop` | Shut down the server |
 | `/backend-factory:analyze` | Re-scan and update the running visualization |
 | `/backend-factory:trace` | Deep-trace a specific route's flow |
-| `/backend-factory:export` | Export architecture as JSON or standalone HTML |
+| `/backend-factory:export` | Export architecture as JSON, HTML, or Mermaid diagram |
 
 ## Specialized Agents
 
@@ -52,7 +52,11 @@ This plugin uses 6 specialized agents that can be launched in parallel:
 - Clicking action buttons spawns pixel-art worker characters
 - Characters walk through the factory pipeline showing request flow
 - Particle effects when characters interact with stations
-- Pan and zoom with mouse, real-time updates via SSE
+- Pan and zoom with mouse (or keyboard: arrows to pan, +/- to zoom, 0/Home to reset)
+- Hover over stations for tooltips showing component details, file paths, and metadata
+- Real-time updates via SSE with automatic reconnection and visual status indicator
+- Export architecture as Mermaid diagram (button in UI or `/factory-export mermaid`)
+- Dirty-flag rendering skips redraws when scene is idle for better performance
 
 ### Character Roster
 
@@ -99,6 +103,7 @@ backend-factory/
 │   ├── index.html
 │   ├── factory.js
 │   ├── characters.js
+│   ├── scenarios.js
 │   └── styles.css
 └── server/                       # Zero-dependency localhost server
     ├── server.js

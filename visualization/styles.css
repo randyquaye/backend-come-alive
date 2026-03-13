@@ -145,6 +145,38 @@ body::after {
   box-shadow: 0 0 6px var(--accent-red);
 }
 
+.status-dot.reconnecting {
+  background: var(--accent-gold);
+  border-color: var(--accent-gold);
+  box-shadow: 0 0 6px var(--accent-gold);
+  animation: blink 1s ease-in-out infinite;
+}
+
+/* Reconnection toast notification */
+#reconnect-toast {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-60px);
+  background: var(--bg-secondary);
+  border: 2px solid var(--accent-green);
+  color: var(--accent-green);
+  font-family: 'Press Start 2P', monospace;
+  font-size: 7px;
+  padding: 8px 16px;
+  z-index: 9998;
+  box-shadow: 0 0 12px rgba(74, 255, 127, 0.3);
+  opacity: 0;
+  transition: transform 0.3s ease, opacity 0.3s ease;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+#reconnect-toast.visible {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+}
+
 /* Framework Badge */
 #framework-badge {
   padding: 8px 12px;

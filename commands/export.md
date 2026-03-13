@@ -1,6 +1,6 @@
 ---
-description: "Export the current factory architecture as JSON, or generate a static HTML snapshot"
-argument-hint: "Format: 'json' or 'html' (default: json)"
+description: "Export the current factory architecture as JSON, HTML snapshot, or Mermaid diagram"
+argument-hint: "Format: 'json', 'html', or 'mermaid' (default: json)"
 allowed-tools: ["Bash", "Read", "Write"]
 ---
 
@@ -28,3 +28,15 @@ If `$ARGUMENTS` contains "html":
 4. Write it to `./factory-snapshot.html`
 
 Tell the user: "Standalone factory snapshot exported to `./factory-snapshot.html` — open it in any browser."
+
+## Mermaid Export
+
+If `$ARGUMENTS` contains "mermaid":
+
+```bash
+curl -s http://localhost:7777/api/export/mermaid > ./factory-architecture.mmd
+```
+
+Tell the user: "Mermaid diagram exported to `./factory-architecture.mmd` — paste into any Mermaid renderer or GitHub markdown."
+
+Note: You can also use the "EXPORT MERMAID" button in the visualization UI to copy the diagram to clipboard.

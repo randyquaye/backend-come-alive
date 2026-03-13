@@ -72,7 +72,9 @@ If `$ARGUMENTS` contains "deep" or "full", launch the full agent pipeline from `
 
 ## Step 5: Report
 
-Tell the user what was detected and that the visualization has been updated. The factory at http://localhost:7777 will auto-refresh via SSE. Mention that they can:
-- Click any station to see file paths, descriptions, and handler names
+Tell the user what was detected and that the visualization has been updated. The factory at http://localhost:7777 will auto-refresh via SSE (with automatic reconnection if the connection drops). Mention that they can:
+- Hover over any station to see tooltips with file paths, descriptions, and handler names
 - Click any character during simulation to see what it's doing and why
 - The info panel at the bottom shows contextual details
+- Use keyboard shortcuts: arrow keys to pan, +/- to zoom, 0/Home to reset view, Space to toggle auto-sim
+- Use "EXPORT MERMAID" button to copy a Mermaid diagram to clipboard

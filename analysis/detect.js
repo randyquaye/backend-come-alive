@@ -8,7 +8,74 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
+// ── Configuration ──
+const CONFIG = {
+  execTimeout: 30000,
+  maxBuffer: 10 * 1024 * 1024, // 10 MB
+  excludedDirs: [
+    'node_modules', '.git', 'dist', 'build',
+    '__pycache__', '.venv', 'venv',
+  ],
+  monorepoApiDirs: [
+    'apps/api', 'apps/server', 'apps/backend',
+    'packages/api', 'packages/server',
+  ],
+  pythonDepFiles: ['requirements.txt', 'Pipfile', 'pyproject.toml'],
+};
+
+// ── Command Result Cache ──
+// In-memory cache that lives for the duration of a single analysis run.
+// Avoids redundant grep/find executions when multiple detection patterns
+// search the same directories with overlapping file extensions.
+
+const _cmdCache = new Map();
+const _cacheStats = { hits: 0, misses: 0 };
+
+function cachedExecSync(cmd, opts) {
+  const cacheKey = cmd + '\x00' + (opts.cwd || '');
+  if (_cmdCache.has(cacheKey)) {
+    _cacheStats.hits++;
+    return _cmdCache.get(cacheKey);
+  }
+  _cacheStats.misses++;
+  const result = execSync(cmd, opts);
+  _cmdCache.set(cacheKey, result);
+  return result;
+}
+
+function resetCmdCache() {
+  _cmdCache.clear();
+  _cacheStats.hits = 0;
+  _cacheStats.misses = 0;
+}
+
+function logCacheStats() {
+  const total = _cacheStats.hits + _cacheStats.misses;
+  if (total > 0) {
+    process.stderr.write(`[detect] command cache: ${_cacheStats.hits} hits, ${_cacheStats.misses} misses (${total} total, ${Math.round(100 * _cacheStats.hits / total)}% hit rate)\n`);
+  }
+}
+
 // ── Helpers ──
+
+/** @type {{ pattern: string, ext: string, reason: string }[]} */
+let _detectionErrors = [];
+
+function resetDetectionErrors() {
+  _detectionErrors = [];
+}
+
+function getDetectionErrors() {
+  return _detectionErrors.slice();
+}
+
+function classifyExecError(err) {
+  const msg = (err.message || '') + (err.stderr || '');
+  if (/ETIMEDOUT|timed?\s*out|killed/i.test(msg) || err.killed) return 'timeout exceeded';
+  if (/ENOENT|command not found|not recognized/i.test(msg)) return 'command not found';
+  if (/EACCES|permission denied/i.test(msg)) return 'permission denied';
+  return 'execution failed';
+}
 
 function escapeShellArg(arg) {
   return "'" + arg.replace(/'/g, "'\\''") + "'";
@@ -18,11 +85,14 @@ function grepMultiGlob(pattern, extensions, cwd) {
   const results = [];
   for (const ext of extensions) {
     try {
-      const cmd = `find . -type f -name "*.${ext}" ! -path "*/node_modules/*" ! -path "*/.git/*" ! -path "*/dist/*" ! -path "*/build/*" ! -path "*/__pycache__/*" ! -path "*/.venv/*" ! -path "*/venv/*" -print0 2>/dev/null | xargs -0 grep -nE ${escapeShellArg(pattern)} 2>/dev/null || true`;
-      const result = execSync(cmd, { cwd, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024, timeout: 30000 });
+      const excludes = CONFIG.excludedDirs.map(d => `! -path "*/${d}/*"`).join(' ');
+      const cmd = `find . -type f -name "*.${ext}" ${excludes} -print0 2>/dev/null | xargs -0 grep -nE ${escapeShellArg(pattern)} 2>/dev/null || true`;
+      const result = cachedExecSync(cmd, { cwd, encoding: 'utf-8', maxBuffer: CONFIG.maxBuffer, timeout: CONFIG.execTimeout });
       results.push(...parseGrepOutput(result, cwd));
-    } catch {
-      // continue
+    } catch (err) {
+      const reason = classifyExecError(err);
+      process.stderr.write(`[detect] warning: grep for pattern /${pattern}/ on *.${ext} failed: ${reason}\n`);
+      _detectionErrors.push({ pattern, ext, reason });
     }
   }
   return results;
@@ -67,7 +137,7 @@ function detectFramework(projectPath) {
   }
 
   // Monorepo: check for apps/api/package.json, apps/server/package.json, etc.
-  const monorepoApiDirs = ['apps/api', 'apps/server', 'apps/backend', 'packages/api', 'packages/server'];
+  const monorepoApiDirs = CONFIG.monorepoApiDirs;
   for (const sub of monorepoApiDirs) {
     const subPkg = path.join(projectPath, sub, 'package.json');
     if (fs.existsSync(subPkg)) {
@@ -104,11 +174,17 @@ function detectFramework(projectPath) {
 
 function readPythonDeps(projectPath) {
   const deps = new Set();
-  const files = ['requirements.txt', 'Pipfile', 'pyproject.toml'];
+  const files = CONFIG.pythonDepFiles;
   for (const f of files) {
     const fp = path.join(projectPath, f);
     if (!fs.existsSync(fp)) continue;
-    const content = fs.readFileSync(fp, 'utf-8').toLowerCase();
+    let content;
+    try {
+      content = fs.readFileSync(fp, 'utf-8').toLowerCase();
+    } catch (err) {
+      process.stderr.write(`[detect] warning: could not read ${f}: ${err.message}\n`);
+      continue;
+    }
     if (content.includes('fastapi')) deps.add('fastapi');
     if (content.includes('flask')) deps.add('flask');
     if (content.includes('django')) deps.add('django');
@@ -201,15 +277,32 @@ function detectComponents(projectPath, framework) {
   const patterns = PATTERNS[framework];
   if (!patterns) return {};
 
+  resetDetectionErrors();
+  resetCmdCache();
+
   const components = {};
   for (const [category, config] of Object.entries(patterns)) {
-    const raw = grepMultiGlob(config.pattern, config.globs, projectPath);
-    components[category] = raw.map(m => ({
-      ...m,
-      ...parseMatch(category, m, framework),
-      category,
-    }));
+    try {
+      const raw = grepMultiGlob(config.pattern, config.globs, projectPath);
+      components[category] = raw.map(m => ({
+        ...m,
+        ...parseMatch(category, m, framework),
+        category,
+      }));
+    } catch (err) {
+      process.stderr.write(`[detect] warning: detection for "${category}" failed entirely: ${err.message}\n`);
+      _detectionErrors.push({ pattern: config.pattern, ext: config.globs.join(','), reason: err.message });
+      components[category] = [];
+    }
   }
+
+  logCacheStats();
+
+  const errors = getDetectionErrors();
+  if (errors.length > 0) {
+    process.stderr.write(`[detect] summary: ${errors.length} pattern${errors.length === 1 ? '' : 's'} failed to execute\n`);
+  }
+
   return components;
 }
 
@@ -273,4 +366,4 @@ function parseMatch(category, match, framework) {
   return meta;
 }
 
-module.exports = { detectFramework, detectComponents, CATEGORY_TO_TYPE };
+module.exports = { detectFramework, detectComponents, CATEGORY_TO_TYPE, getDetectionErrors, resetCmdCache };

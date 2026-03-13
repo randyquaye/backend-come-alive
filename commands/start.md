@@ -410,7 +410,9 @@ Summarize what was detected:
 - Number of background workers, cron jobs, pollers, webhook handlers, and event listeners found
 - Key architectural observations from the agents
 - The factory is running at http://localhost:7777
-- Mention that clicking stations shows file paths, descriptions, factory roles, and station labels
+- Mention that hovering over stations shows tooltips with file paths, descriptions, factory roles, and station labels
 - Mention that clicking characters during simulation shows flow context
 - Mention the different action types: route actions show HTTP flows, worker actions (⚡) show queue processing, cron actions (🕐) show scheduled tasks, webhook actions (📬) show incoming webhook handling, poller actions (📡) show external API polling, and event actions (👂) show pub/sub event handling
-- Available commands: `/factory-stop`, `/factory-analyze`, `/factory-trace`
+- Mention keyboard shortcuts: arrow keys to pan, +/- to zoom, 0/Home to reset view, Space to toggle auto-sim
+- Mention the "EXPORT MERMAID" button to copy a Mermaid diagram to clipboard
+- Available commands: `/factory-stop`, `/factory-analyze`, `/factory-trace`, `/factory-export mermaid`

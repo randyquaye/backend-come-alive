@@ -6,21 +6,51 @@
 (function() {
   'use strict';
 
-  const COLORS = {
-    floor: '#0d0d1a',
-    grid: '#151528',
-    conveyor: '#1a2a1f',
-    conveyorLine: '#2a4a3a',
-    conveyorDot: '#33ff99',
-    stationBg: '#1a1a2e',
-    stationBorder: '#2a4a3a',
-    stationLabel: '#88ffcc',
-    entryGate: '#4a9eff',
-    exitGate: '#4af5ff',
-    errorStation: '#ff4a4a',
-    particle: '#ffaa33',
-    pathLine: '#1a3a2a',
+  // ── Configuration ──
+  const CONFIG = {
+    // Grid
+    gridSize: 40,
+
+    // Layout
+    stationWidth: 120,
+    stationHeight: 70,
+    layerGap: 160,
+    nodeGap: 80,
+    marginX: 80,
+    marginY: 80,
+
+    // Animation / movement
+    characterSpeed: 1.2,
+    defaultDwellMultiplier: 1.0,
+    minDwellFrames: 30,
+    defaultDwellFrames: 120,
+    dbTimingJitter: 90,
+    externalTimingJitter: 60,
+
+    // Dwell speed slider mapping
+    dwellSliderMin: 0.33,     // multiplier at slider 0  (3x slower)
+    dwellSliderMid: 1.0,      // multiplier at slider 50 (normal)
+    dwellSliderMax: 5.0,      // multiplier at slider 100 (5x faster)
+
+    // Color palette
+    colors: {
+      floor: '#0d0d1a',
+      grid: '#151528',
+      conveyor: '#1a2a1f',
+      conveyorLine: '#2a4a3a',
+      conveyorDot: '#33ff99',
+      stationBg: '#1a1a2e',
+      stationBorder: '#2a4a3a',
+      stationLabel: '#88ffcc',
+      entryGate: '#4a9eff',
+      exitGate: '#4af5ff',
+      errorStation: '#ff4a4a',
+      particle: '#ffaa33',
+      pathLine: '#1a3a2a',
+    },
   };
+
+  const COLORS = CONFIG.colors;
 
   // Station visual configs
   const STATION_STYLES = {
@@ -58,12 +88,12 @@
     'exit': 8,
   };
 
-  const STATION_WIDTH = 120;
-  const STATION_HEIGHT = 70;
-  const LAYER_GAP = 160;
-  const NODE_GAP = 80;
-  const MARGIN_X = 80;
-  const MARGIN_Y = 80;
+  const STATION_WIDTH = CONFIG.stationWidth;
+  const STATION_HEIGHT = CONFIG.stationHeight;
+  const LAYER_GAP = CONFIG.layerGap;
+  const NODE_GAP = CONFIG.nodeGap;
+  const MARGIN_X = CONFIG.marginX;
+  const MARGIN_Y = CONFIG.marginY;
 
   // Variable processing times per station type (in frames at 60fps)
   // These are BASE times — multiplied by the dwell speed multiplier
@@ -88,7 +118,7 @@
 
   // Dwell speed multiplier (0-100 slider maps to 0.2x-3.0x)
   // 50 = 1.0x (default), 0 = 3.0x (slowest), 100 = 0.2x (fastest)
-  let dwellSpeedMultiplier = 1.0;
+  let dwellSpeedMultiplier = CONFIG.defaultDwellMultiplier;
 
   // Speech bubble messages per station type
   const STATION_MESSAGES = {
@@ -209,15 +239,35 @@
       this.editMode = false;
       this.dragStation = null; // station being dragged in edit mode
       this.dragStationOffset = { x: 0, y: 0 };
+
+      // Dirty-flag system: skip rendering when nothing has changed
+      this.needsRedraw = true;
     }
 
     init(canvasElement) {
       this.canvas = canvasElement;
       this.ctx = canvasElement.getContext('2d');
       this.resize();
+      this._createTooltip();
       this._setupInput();
       this.running = true;
       this._loop();
+    }
+
+    _createTooltip() {
+      const tip = document.createElement('div');
+      tip.id = 'factory-tooltip';
+      tip.style.cssText = [
+        'position:fixed', 'display:none', 'pointer-events:none', 'z-index:9999',
+        'background:#0d0d1a', 'border:2px solid #2a4a3a', 'padding:8px 12px',
+        'font-family:"Press Start 2P",monospace', 'font-size:8px', 'color:#88ffcc',
+        'max-width:320px', 'white-space:pre-line', 'line-height:1.6',
+        'box-shadow:0 0 12px rgba(0,0,0,0.8),inset 0 0 4px rgba(51,255,153,0.05)',
+        'image-rendering:pixelated',
+      ].join(';');
+      document.body.appendChild(tip);
+      this._tooltip = tip;
+      this._tooltipStationId = null;
     }
 
     resize() {
@@ -230,6 +280,7 @@
       this.canvas.style.width = this.width + 'px';
       this.canvas.style.height = this.height + 'px';
       this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.needsRedraw = true;
     }
 
     _setupInput() {
@@ -331,6 +382,9 @@
           }
         }
 
+        // Hide tooltip on drag
+        if (this._tooltip) { this._tooltip.style.display = 'none'; this._tooltipStationId = null; }
+
         // Normal: pan with mouse drag
         this.isDragging = true;
         this.cameraFollowEnabled = false; // disable auto-follow while panning
@@ -355,12 +409,18 @@
           s.centerX = s.x + STATION_WIDTH / 2;
           s.centerY = s.y + STATION_HEIGHT / 2;
           this._recalcPaths(); // recalculate conveyor paths
+          this.needsRedraw = true;
           return;
         }
 
-        if (!this.isDragging) return;
+        if (!this.isDragging) {
+          // Hover tooltip detection
+          this._updateTooltip(e, screenToWorld, hitTestStation);
+          return;
+        }
         this.camera.x = this.cameraStart.x + (e.clientX - this.dragStart.x);
         this.camera.y = this.cameraStart.y + (e.clientY - this.dragStart.y);
+        this.needsRedraw = true;
       });
 
       window.addEventListener('mouseup', () => {
@@ -384,9 +444,79 @@
         this.camera.x = mx - (mx - this.camera.x) * (newZoom / this.camera.zoom);
         this.camera.y = my - (my - this.camera.y) * (newZoom / this.camera.zoom);
         this.camera.zoom = newZoom;
+        this.needsRedraw = true;
       }, { passive: false });
 
       this.canvas.style.cursor = 'grab';
+
+      // Hide tooltip when mouse leaves canvas
+      this.canvas.addEventListener('mouseleave', () => {
+        if (this._tooltip) {
+          this._tooltip.style.display = 'none';
+          this._tooltipStationId = null;
+        }
+      });
+
+      // ── Keyboard shortcuts ──
+      const PAN_STEP = 60;
+      const ZOOM_STEP = 1.15;
+
+      window.addEventListener('keydown', (e) => {
+        // Don't fire when typing in input/textarea/select
+        const tag = (e.target.tagName || '').toLowerCase();
+        if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
+
+        let handled = true;
+        switch (e.key) {
+          case 'ArrowLeft':
+            this.camera.x += PAN_STEP;
+            this.cameraFollowEnabled = false;
+            break;
+          case 'ArrowRight':
+            this.camera.x -= PAN_STEP;
+            this.cameraFollowEnabled = false;
+            break;
+          case 'ArrowUp':
+            this.camera.y += PAN_STEP;
+            this.cameraFollowEnabled = false;
+            break;
+          case 'ArrowDown':
+            this.camera.y -= PAN_STEP;
+            this.cameraFollowEnabled = false;
+            break;
+          case '+':
+          case '=': {
+            const newZoom = Math.min(3, this.camera.zoom * ZOOM_STEP);
+            const cx = this.width / 2;
+            const cy = this.height / 2;
+            this.camera.x = cx - (cx - this.camera.x) * (newZoom / this.camera.zoom);
+            this.camera.y = cy - (cy - this.camera.y) * (newZoom / this.camera.zoom);
+            this.camera.zoom = newZoom;
+            break;
+          }
+          case '-':
+          case '_': {
+            const newZoom = Math.max(0.3, this.camera.zoom / ZOOM_STEP);
+            const cx = this.width / 2;
+            const cy = this.height / 2;
+            this.camera.x = cx - (cx - this.camera.x) * (newZoom / this.camera.zoom);
+            this.camera.y = cy - (cy - this.camera.y) * (newZoom / this.camera.zoom);
+            this.camera.zoom = newZoom;
+            break;
+          }
+          case '0':
+          case 'Home':
+            this._centerCamera();
+            this.cameraFollowEnabled = true;
+            break;
+          case ' ':
+            document.getElementById('btn-auto-sim').click();
+            break;
+          default:
+            handled = false;
+        }
+        if (handled) e.preventDefault();
+      });
     }
 
     // ═══════════════════════════════════════════
@@ -474,6 +604,7 @@
 
       // Center camera on the layout
       this._centerCamera();
+      this.needsRedraw = true;
     }
 
     _centerCamera() {
@@ -521,6 +652,7 @@
     toggleEditMode() {
       this.editMode = !this.editMode;
       this.canvas.style.cursor = this.editMode ? 'crosshair' : 'grab';
+      this.needsRedraw = true;
       return this.editMode;
     }
 
@@ -571,7 +703,7 @@
       const charType = (action.characterType) ||
         ACTION_CHAR_MAP[action.type] || 'RequestWorker';
       const char = new window.Characters.Character(charType, waypoints[0].x, waypoints[0].y);
-      char.speed = 1.2;
+      char.speed = CONFIG.characterSpeed;
 
       if (!isAllowed && rateLimitStationIdx > 0) {
         // Character walks to the rate limiter then gets blocked
@@ -586,15 +718,15 @@
       char._stationTimings = {};
       waypoints.forEach(wp => {
         if (wp.stationType) {
-          let timing = STATION_TIMING[wp.stationType] || 120;
+          let timing = STATION_TIMING[wp.stationType] || CONFIG.defaultDwellFrames;
           // Add randomness to DB/external timing
           if (wp.stationType === 'database') {
-            timing += Math.floor(Math.random() * 90);
+            timing += Math.floor(Math.random() * CONFIG.dbTimingJitter);
           } else if (wp.stationType === 'external' || wp.stationType === 'external_api') {
-            timing += Math.floor(Math.random() * 60);
+            timing += Math.floor(Math.random() * CONFIG.externalTimingJitter);
           }
           // Apply dwell speed multiplier (only affects station pause, not travel)
-          timing = Math.max(30, Math.round(timing / dwellSpeedMultiplier));
+          timing = Math.max(CONFIG.minDwellFrames, Math.round(timing / dwellSpeedMultiplier));
           char._stationTimings[wp.stationId] = timing;
         }
       });
@@ -740,6 +872,7 @@
       char.showBubble(entryMsg, 60, STATION_STYLES.entrypoint.color);
 
       this.characters.push(char);
+      this.needsRedraw = true;
     }
 
     simulateAll() {
@@ -758,11 +891,20 @@
     _loop() {
       if (!this.running) return;
       this._update();
-      this._draw();
+      if (this.needsRedraw) {
+        this._draw();
+        this.needsRedraw = false;
+      }
       requestAnimationFrame(() => this._loop());
     }
 
     _update() {
+      // Mark dirty when there are active characters, particles, or a visible info panel
+      if (this.characters.length > 0 || this.particles.length > 0 ||
+          (this._infoPanel && this._infoPanel.timer > 0)) {
+        this.needsRedraw = true;
+      }
+
       this.conveyorOffset = (this.conveyorOffset + 0.5) % 12;
 
       // Update characters
@@ -864,7 +1006,7 @@
     _drawGrid(ctx) {
       ctx.strokeStyle = COLORS.grid;
       ctx.lineWidth = 0.5;
-      const gridSize = 40;
+      const gridSize = CONFIG.gridSize;
       // Compute visible area
       const startX = Math.floor(-this.camera.x / this.camera.zoom / gridSize) * gridSize - gridSize;
       const startY = Math.floor(-this.camera.y / this.camera.zoom / gridSize) * gridSize - gridSize;
@@ -1599,8 +1741,80 @@
     // INFO PANEL (bottom of screen)
     // ═══════════════════════════════════════════
 
+    _updateTooltip(e, screenToWorld, hitTestStation) {
+      const rect = this.canvas.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      const world = screenToWorld(sx, sy);
+      const hit = hitTestStation(world.x, world.y);
+
+      if (!hit) {
+        if (this._tooltipStationId !== null) {
+          this._tooltip.style.display = 'none';
+          this._tooltipStationId = null;
+        }
+        return;
+      }
+
+      // Same station — just reposition
+      if (this._tooltipStationId === hit.id) {
+        this._positionTooltip(e.clientX, e.clientY);
+        return;
+      }
+
+      // New station hovered
+      this._tooltipStationId = hit.id;
+      const node = hit.station.node;
+      const meta = node.metadata || {};
+      const style = STATION_STYLES[node.type] || STATION_STYLES.service;
+
+      // Build tooltip content
+      const lines = [];
+      lines.push(style.icon + ' ' + node.name);
+      lines.push('Type: ' + (style.label || node.type).toUpperCase());
+      if (meta.description) lines.push(meta.description);
+      if (meta.filePath) lines.push('File: ' + meta.filePath);
+      if (meta.handler) lines.push('Handler: ' + meta.handler);
+      if (meta.dbTables) lines.push('Tables: ' + (Array.isArray(meta.dbTables) ? meta.dbTables.join(', ') : meta.dbTables));
+      if (meta.tables) lines.push('Tables: ' + (Array.isArray(meta.tables) ? meta.tables.join(', ') : meta.tables));
+      if (meta.orm) lines.push('ORM: ' + meta.orm);
+      if (meta.authMethods) lines.push('Auth: ' + (Array.isArray(meta.authMethods) ? meta.authMethods.join(', ') : meta.authMethods));
+      if (meta.queueName) lines.push('Queue: ' + meta.queueName);
+      if (meta.middlewareChain) lines.push('MW: ' + (Array.isArray(meta.middlewareChain) ? meta.middlewareChain.join(' > ') : meta.middlewareChain));
+
+      this._tooltip.innerHTML = lines.map((l, i) => {
+        if (i === 0) return '<div style="color:' + style.color + ';margin-bottom:4px">' + this._escHtml(l) + '</div>';
+        if (i === 1) return '<div style="color:#557766;margin-bottom:4px;font-size:7px">' + this._escHtml(l) + '</div>';
+        return '<div style="color:#88ffcc;font-size:7px">' + this._escHtml(l) + '</div>';
+      }).join('');
+      this._tooltip.style.borderColor = style.color;
+      this._tooltip.style.display = 'block';
+      this._positionTooltip(e.clientX, e.clientY);
+    }
+
+    _positionTooltip(cx, cy) {
+      const tip = this._tooltip;
+      const pad = 14;
+      let tx = cx + pad;
+      let ty = cy + pad;
+      // Keep tooltip on-screen
+      const tw = tip.offsetWidth;
+      const th = tip.offsetHeight;
+      if (tx + tw > window.innerWidth - 4) tx = cx - tw - pad;
+      if (ty + th > window.innerHeight - 4) ty = cy - th - pad;
+      tip.style.left = tx + 'px';
+      tip.style.top = ty + 'px';
+    }
+
+    _escHtml(str) {
+      const d = document.createElement('div');
+      d.textContent = str;
+      return d.innerHTML;
+    }
+
     _showInfoPanel(text, color, duration) {
       this._infoPanel = { text, color: color || '#33ff99', timer: duration || 300 };
+      this.needsRedraw = true;
     }
 
     _drawInfoPanel(ctx) {
@@ -1710,14 +1924,14 @@
   // ═══════════════════════════════════════════
   // Slider value 0-100: 0=slowest (3x dwell), 50=default (1x), 100=fastest (0.2x dwell)
   window.setDwellSpeed = function(sliderValue) {
-    // Map 0-100 to multiplier: 0→0.33 (3x slower), 50→1.0, 100→5.0 (5x faster)
+    // Map 0-100 to multiplier using CONFIG slider bounds
     const v = Math.max(0, Math.min(100, sliderValue));
     if (v <= 50) {
-      // 0-50: maps to 0.33-1.0 (slower range)
-      dwellSpeedMultiplier = 0.33 + (v / 50) * 0.67;
+      // 0-50: maps to dwellSliderMin-dwellSliderMid (slower range)
+      dwellSpeedMultiplier = CONFIG.dwellSliderMin + (v / 50) * (CONFIG.dwellSliderMid - CONFIG.dwellSliderMin);
     } else {
-      // 50-100: maps to 1.0-5.0 (faster range)
-      dwellSpeedMultiplier = 1.0 + ((v - 50) / 50) * 4.0;
+      // 50-100: maps to dwellSliderMid-dwellSliderMax (faster range)
+      dwellSpeedMultiplier = CONFIG.dwellSliderMid + ((v - 50) / 50) * (CONFIG.dwellSliderMax - CONFIG.dwellSliderMid);
     }
   };
 

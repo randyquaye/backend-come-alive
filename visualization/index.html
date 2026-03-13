@@ -4,9 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Backend Factory</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32' shape-rendering='crispEdges'><rect width='32' height='32' fill='%230a1a12'/><rect x='4' y='4' width='4' height='4' fill='%2333ff99'/><rect x='8' y='4' width='4' height='4' fill='%2300cccc'/><rect x='12' y='4' width='4' height='4' fill='%2333ff99'/><rect x='4' y='8' width='4' height='4' fill='%2300cccc'/><rect x='8' y='8' width='4' height='4' fill='%231a3a2a'/><rect x='12' y='8' width='4' height='4' fill='%2300cccc'/><rect x='2' y='12' width='28' height='4' fill='%2333ff99'/><rect x='2' y='16' width='4' height='12' fill='%2300cccc'/><rect x='10' y='16' width='4' height='8' fill='%231a3a2a'/><rect x='14' y='16' width='4' height='8' fill='%2333ff99'/><rect x='26' y='16' width='4' height='12' fill='%2300cccc'/><rect x='2' y='28' width='28' height='2' fill='%2333ff99'/><rect x='18' y='6' width='10' height='6' fill='%231a3a2a'/><rect x='18' y='6' width='10' height='2' fill='%2300cccc'/><rect x='20' y='2' width='2' height='4' fill='%23557766'/><rect x='24' y='0' width='2' height='6' fill='%23557766'/></svg>">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <div id="reconnect-toast">RECONNECTED</div>
   <div id="app">
     <div id="canvas-container">
       <canvas id="factory-canvas"></canvas>
@@ -49,6 +51,9 @@
         <button class="btn btn-edit" id="btn-edit-mode" style="display:none">
           ✎ EDIT MODE
         </button>
+        <button class="btn btn-edit" id="btn-export-mermaid" style="display:none">
+          ⎘ EXPORT MERMAID
+        </button>
         <div id="speed-control" style="display:none; padding: 8px 12px; border-top: 1px solid #1a3a2a;">
           <label style="font-size: 9px; color: #557766; text-transform: uppercase; letter-spacing: 1px;">Station Dwell Speed</label>
           <div style="display: flex; align-items: center; gap: 6px; margin-top: 4px;">
@@ -58,6 +63,20 @@
             <span style="font-size: 8px; color: #446655;">Fast</span>
           </div>
         </div>
+      </div>
+
+      <div id="shortcuts-hint" style="padding: 6px 12px; border-top: 1px solid #1a3a2a;">
+        <details style="cursor: pointer;">
+          <summary style="font-size: 8px; color: #557766; letter-spacing: 1px; text-transform: uppercase; list-style: none; display: flex; align-items: center; gap: 4px;">
+            <span style="color: #88ffcc; font-size: 10px;">?</span> KEYBOARD SHORTCUTS
+          </summary>
+          <div style="margin-top: 6px; font-size: 7px; color: #446655; line-height: 1.8;">
+            <div><span style="color: #88ffcc;">ARROWS</span> Pan view</div>
+            <div><span style="color: #88ffcc;">+ / -</span> Zoom in/out</div>
+            <div><span style="color: #88ffcc;">0 / Home</span> Reset view</div>
+            <div><span style="color: #88ffcc;">SPACE</span> Toggle auto-sim</div>
+          </div>
+        </details>
       </div>
 
       <div id="stats-footer">
@@ -99,14 +118,32 @@
       const API_BASE = 'http://localhost:7777';
       let eventSource = null;
 
+      // ── SSE Reconnection State ──
+      const MAX_BACKOFF = 30000;
+      const MAX_RETRIES = 10;
+      let backoffDelay = 1000;
+      let retryCount = 0;
+      let reconnectTimer = null;
+      let wasConnected = false;
+
       // ── Initialize Factory ──
       const canvas = document.getElementById('factory-canvas');
       window.Factory.init(canvas);
 
       window.addEventListener('resize', () => window.Factory.resize());
 
-      // ── Connect to server ──
+      // ── Connect to server with exponential backoff ──
       function connect() {
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+
+        // Show reconnecting state if this is a retry
+        if (retryCount > 0) {
+          setStatus('reconnecting');
+        }
+
         // Fetch initial architecture
         fetch(API_BASE + '/api/architecture')
           .then(r => r.json())
@@ -114,18 +151,42 @@
             if (data && data.nodes) {
               loadArchitecture(data);
             }
-            setConnected(true);
           })
-          .catch(() => setConnected(false));
+          .catch(() => {});
 
         // SSE for live updates
         if (eventSource) eventSource.close();
         eventSource = new EventSource(API_BASE + '/api/events');
-        eventSource.onopen = () => setConnected(true);
-        eventSource.onerror = () => {
-          setConnected(false);
-          setTimeout(connect, 5000);
+
+        eventSource.onopen = () => {
+          var isReconnection = wasConnected && retryCount > 0;
+          // Reset backoff on successful connection
+          backoffDelay = 1000;
+          retryCount = 0;
+          setStatus('connected');
+          if (isReconnection) {
+            showReconnectToast();
+          }
+          wasConnected = true;
         };
+
+        eventSource.onerror = () => {
+          if (eventSource) eventSource.close();
+          eventSource = null;
+
+          // Give up after max retries
+          if (retryCount >= MAX_RETRIES) {
+            setStatus('disconnected');
+            return;
+          }
+
+          retryCount++;
+          setStatus('reconnecting');
+          // Schedule reconnect with exponential backoff: 1s, 2s, 4s, 8s, ... max 30s
+          reconnectTimer = setTimeout(connect, backoffDelay);
+          backoffDelay = Math.min(backoffDelay * 2, MAX_BACKOFF);
+        };
+
         eventSource.addEventListener('architecture_updated', (e) => {
           try {
             const data = JSON.parse(e.data);
@@ -136,11 +197,25 @@
         });
       }
 
-      function setConnected(connected) {
+      function setStatus(state) {
         const dot = document.getElementById('status-dot');
         const text = document.getElementById('status-text');
-        dot.className = 'status-dot ' + (connected ? 'connected' : 'disconnected');
-        text.textContent = connected ? 'Connected' : 'Disconnected';
+        dot.className = 'status-dot ' + state;
+        if (state === 'connected') {
+          text.textContent = 'Connected';
+        } else if (state === 'reconnecting') {
+          text.textContent = 'Reconnecting...';
+        } else {
+          text.textContent = 'Disconnected';
+        }
+      }
+
+      function showReconnectToast() {
+        var toast = document.getElementById('reconnect-toast');
+        toast.classList.add('visible');
+        setTimeout(function() {
+          toast.classList.remove('visible');
+        }, 2500);
       }
 
       // ── Load Architecture Data ──
@@ -212,12 +287,14 @@
           document.getElementById('btn-simulate-all').style.display = 'block';
           document.getElementById('btn-auto-sim').style.display = 'block';
           document.getElementById('btn-edit-mode').style.display = 'block';
+          document.getElementById('btn-export-mermaid').style.display = 'block';
           document.getElementById('speed-control').style.display = 'block';
         } else {
           container.innerHTML = '<div class="no-data">No actions detected</div>';
           document.getElementById('btn-simulate-all').style.display = 'none';
           document.getElementById('btn-auto-sim').style.display = 'none';
           document.getElementById('btn-edit-mode').style.display = 'none';
+          document.getElementById('btn-export-mermaid').style.display = 'none';
           document.getElementById('speed-control').style.display = 'none';
         }
       }
@@ -262,6 +339,26 @@
         btn.style.borderColor = active ? 'var(--accent-red)' : '';
       });
 
+      // ── Export Mermaid ──
+      document.getElementById('btn-export-mermaid').addEventListener('click', () => {
+        const btn = document.getElementById('btn-export-mermaid');
+        fetch(API_BASE + '/api/export/mermaid')
+          .then(r => r.text())
+          .then(text => {
+            navigator.clipboard.writeText(text).then(() => {
+              btn.textContent = '✓ COPIED!';
+              setTimeout(() => { btn.textContent = '⎘ EXPORT MERMAID'; }, 2000);
+            }).catch(() => {
+              // Fallback: prompt user
+              prompt('Copy the Mermaid diagram:', text);
+            });
+          })
+          .catch(() => {
+            btn.textContent = '✗ FAILED';
+            setTimeout(() => { btn.textContent = '⎘ EXPORT MERMAID'; }, 2000);
+          });
+      });
+
       // ── Dwell Speed Slider ──
       document.getElementById('dwell-slider').addEventListener('input', (e) => {
         if (window.setDwellSpeed) window.setDwellSpeed(parseInt(e.target.value));
@@ -269,14 +366,6 @@
 
       // ── Start connection ──
       connect();
-
-      // Retry connection every 5 seconds if not connected
-      setInterval(() => {
-        const dot = document.getElementById('status-dot');
-        if (dot.classList.contains('disconnected')) {
-          connect();
-        }
-      }, 5000);
 
     })();
   </script>
