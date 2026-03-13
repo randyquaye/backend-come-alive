@@ -79,6 +79,8 @@
     var debt = 0;
     if (sourceKarma < 40) debt += (40 - sourceKarma) * 1.5;
     if (sourceKarma < 20) debt += 20; // critical source = heavy debt
+    // High-karma targets depending on low-karma sources accumulate extra debt
+    if (targetKarma > 60 && sourceKarma < 40) debt += 10;
     return Math.min(100, debt);
   }
 
