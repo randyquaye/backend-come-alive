@@ -238,6 +238,9 @@
       // Auto-sim state: when true, camera does NOT auto-follow characters
       this.autoSimActive = false;
 
+      // Pause state: freezes all character/particle animation
+      this.paused = false;
+
       // Edit mode
       this.editMode = false;
       this.dragStation = null; // station being dragged in edit mode
@@ -388,8 +391,9 @@
         // Hide tooltip on drag
         if (this._tooltip) { this._tooltip.style.display = 'none'; this._tooltipStationId = null; }
 
-        // Normal: pan with mouse drag
+        // Normal: pan with mouse drag — also pause everything while held
         this.isDragging = true;
+        this.paused = true;
         this.cameraFollowEnabled = false; // disable auto-follow while panning
         this.dragStart.x = e.clientX;
         this.dragStart.y = e.clientY;
@@ -433,6 +437,7 @@
           return;
         }
         this.isDragging = false;
+        this.paused = false;
         this.canvas.style.cursor = this.editMode ? 'crosshair' : 'grab';
       });
 
@@ -515,7 +520,7 @@
             }
             break;
           case ' ':
-            document.getElementById('btn-auto-sim').click();
+            this.paused = !this.paused;
             break;
           default:
             handled = false;
@@ -923,6 +928,9 @@
           (this._infoPanel && this._infoPanel.timer > 0)) {
         this.needsRedraw = true;
       }
+
+      // When paused, freeze all animation but keep rendering (so panning still works)
+      if (this.paused) return;
 
       this.conveyorOffset = (this.conveyorOffset + 0.5) % 12;
 
