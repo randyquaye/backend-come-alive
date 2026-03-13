@@ -29,7 +29,7 @@ lsof -ti:7777 | xargs kill 2>/dev/null || true
 
 ### 2. Start the Server
 ```bash
-node ~/.claude/skills/backend-factory/server/server.js &
+node ${CLAUDE_PLUGIN_ROOT}/server/server.js &
 ```
 Wait 2 seconds for startup.
 

@@ -235,6 +235,9 @@
       // Rate limit simulation
       this.rateLimiter = new RateLimitSimulator();
 
+      // Auto-sim state: when true, camera does NOT auto-follow characters
+      this.autoSimActive = false;
+
       // Edit mode
       this.editMode = false;
       this.dragStation = null; // station being dragged in edit mode
@@ -507,7 +510,9 @@
           case '0':
           case 'Home':
             this._centerCamera();
-            this.cameraFollowEnabled = true;
+            if (!this.autoSimActive) {
+              this.cameraFollowEnabled = true;
+            }
             break;
           case ' ':
             document.getElementById('btn-auto-sim').click();
@@ -870,8 +875,10 @@
         }
       };
 
-      // Re-enable camera follow when new character spawns
-      this.cameraFollowEnabled = true;
+      // Re-enable camera follow when new character spawns (but not during auto-sim)
+      if (!this.autoSimActive) {
+        this.cameraFollowEnabled = true;
+      }
 
       // Attach action context for click-to-inspect
       char._actionContext = action.context || action.description || action.name;
@@ -1844,35 +1851,35 @@
       const color = this._infoPanel.color;
       const alpha = Math.min(1, this._infoPanel.timer / 30);
 
-      const panelH = 44;
-      const panelY = this.height - panelH - 8;
-      const panelX = 8;
-      const panelW = this.width - 296; // leave space for side panel
+      const panelH = 72;
+      const panelY = this.height - panelH - 10;
+      const panelX = 10;
+      const panelW = this.width - 300; // leave space for side panel
 
       // Background
       ctx.fillStyle = '#0d0d1a';
-      ctx.globalAlpha = 0.9 * alpha;
+      ctx.globalAlpha = 0.92 * alpha;
       ctx.fillRect(panelX, panelY, panelW, panelH);
 
       // Border
       ctx.strokeStyle = color;
       ctx.globalAlpha = 0.7 * alpha;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = 2;
       ctx.strokeRect(panelX, panelY, panelW, panelH);
 
       // Text
       ctx.fillStyle = color;
       ctx.globalAlpha = alpha;
-      ctx.font = '8px monospace';
+      ctx.font = '12px monospace';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
 
       // Word wrap
-      const maxW = panelW - 16;
+      const maxW = panelW - 24;
       const words = text.split(' ');
       let line = '';
-      let y = panelY + 8;
-      const lineH = 12;
+      let y = panelY + 12;
+      const lineH = 18;
       for (const word of words) {
         const test = line + (line ? ' ' : '') + word;
         if (ctx.measureText(test).width > maxW && line) {

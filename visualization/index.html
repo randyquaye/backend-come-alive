@@ -53,6 +53,9 @@
             Waiting for<br>architecture data...
           </div>
         </div>
+      </div>
+
+      <div id="panel-controls">
         <button class="btn btn-simulate-all" id="btn-simulate-all" style="display:none">
           ▶ SIMULATE ALL
         </button>
@@ -65,7 +68,7 @@
         <button class="btn btn-edit" id="btn-export-mermaid" style="display:none">
           ⎘ EXPORT MERMAID
         </button>
-        <div id="speed-control" style="display:none; padding: 8px 12px; border-top: 1px solid #1a3a2a;">
+        <div id="speed-control" style="display:none; padding: 8px 0 0 0;">
           <label style="font-size: 9px; color: #557766; text-transform: uppercase; letter-spacing: 1px;">Station Dwell Speed</label>
           <div style="display: flex; align-items: center; gap: 6px; margin-top: 4px;">
             <span style="font-size: 8px; color: #446655;">Slow</span>
@@ -339,9 +342,12 @@
         if (autoSimInterval) {
           clearInterval(autoSimInterval);
           autoSimInterval = null;
+          window.Factory.autoSimActive = false;
           btn.textContent = '⟳ AUTO-SIM: OFF';
           btn.style.borderColor = '';
         } else {
+          window.Factory.autoSimActive = true;
+          window.Factory.cameraFollowEnabled = false;
           autoSimInterval = setInterval(() => {
             if (!window.Factory.architecture || !window.Factory.architecture.actions) return;
             const actions = window.Factory.architecture.actions;

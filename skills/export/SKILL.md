@@ -1,7 +1,9 @@
 ---
+name: export
 description: "Export the current factory architecture as JSON, HTML snapshot, or Mermaid diagram"
 argument-hint: "Format: 'json', 'html', or 'mermaid' (default: json)"
-allowed-tools: ["Bash", "Read", "Write"]
+disable-model-invocation: true
+allowed-tools: Bash, Read, Write
 ---
 
 # Backend Factory - Export
@@ -23,7 +25,7 @@ Tell the user: "Architecture exported to `./factory-architecture.json`"
 If `$ARGUMENTS` contains "html":
 
 1. Fetch current architecture data
-2. Read the visualization files (index.html, factory.js, characters.js, styles.css)
+2. Read the visualization files from `${CLAUDE_PLUGIN_ROOT}/visualization/` (index.html, factory.js, characters.js, styles.css)
 3. Create a single self-contained HTML file with the architecture JSON embedded inline
 4. Write it to `./factory-snapshot.html`
 
