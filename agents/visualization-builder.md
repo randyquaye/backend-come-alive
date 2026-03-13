@@ -29,7 +29,7 @@ lsof -ti:7777 | xargs kill 2>/dev/null || true
 
 ### 2. Start the Server
 ```bash
-node ~/.claude/skills/backend-factory/server/server.js &
+node ${CLAUDE_PLUGIN_ROOT}/server/server.js &
 ```
 Wait 2 seconds for startup.
 
@@ -40,7 +40,7 @@ curl -s http://localhost:7777/api/status
 Confirm `{"status":"running"}`.
 
 ### 4. Validate Rich Metadata
-Before sending, check the architecture JSON for required creative fields. Log warnings for any missing data — the visualization will still work but will be less engaging:
+Before sending, check the architecture JSON for required creative fields. The server validates that all nodes have `id`, `type`, and `label` fields and will reject malformed payloads with a 400 error. Log warnings for any missing data — the visualization will still work but will be less engaging:
 
 **Required rich fields to check for:**
 - `projectPersonality` — if missing, warn: "Missing project personality — factory will use generic theme"

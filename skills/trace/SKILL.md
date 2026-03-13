@@ -1,7 +1,9 @@
 ---
+name: trace
 description: "Trace a specific API route, worker, cron job, webhook, or event flow through the backend and visualize its complete path"
 argument-hint: "Flow to trace, e.g. 'POST /api/messages', 'worker rule-sync', 'cron cleanup', 'webhook stripe', 'event user.created'"
-allowed-tools: ["Bash", "Read", "Glob", "Grep", "Agent"]
+disable-model-invocation: true
+allowed-tools: Bash, Read, Glob, Grep, Agent
 ---
 
 # Backend Factory - Trace Flow
@@ -21,7 +23,7 @@ Deep-trace a single flow (route, worker, cron job, webhook, poller, or event lis
 | `poller <name>` | Polling service | `poller blockchain`, `poller exchange-rates` |
 | `event <name>` | Event listener | `event user.created`, `event order.completed` |
 
-If `$ARGUMENTS` is empty, list ALL detected flows (not just routes) from the running factory and ask the user to pick one:
+If `$ARGUMENTS` is empty, list ALL detected flows from the running factory and ask the user to pick one:
 ```bash
 curl -s http://localhost:7777/api/architecture | jq '.actions[] | "\(.type // "route"): \(.name) — \(.description)"'
 ```
@@ -43,39 +45,34 @@ Launch the **flow-tracer** agent with:
 - The framework type
 - The project root path
 
-**For route flows** (default, existing behavior):
-- The flow-tracer follows imports and function calls from the route handler to build the complete request flow path through middleware, handlers, DB calls, queue dispatches, etc.
+**For route flows** (default):
+- The flow-tracer follows imports and function calls from the route handler to build the complete request flow path.
 
 **For worker flows**:
-- Tell the flow-tracer to find the queue consumer/processor function (e.g., the BullMQ `Worker` handler, Celery `@task`, Sidekiq `perform`)
-- Trace from the job dequeue through all processing logic, DB operations, external API calls, and any further queue dispatches
+- Find the queue consumer/processor function (e.g., BullMQ `Worker` handler, Celery `@task`)
+- Trace from the job dequeue through all processing logic
 - The entry point is the queue, not an HTTP entrypoint
 
 **For cron flows**:
-- Tell the flow-tracer to find the scheduled task function (e.g., node-cron callback, `@Cron` handler, agenda job definition)
-- Trace from the cron trigger through all operations it performs
-- The entry point is a time-based trigger, not an HTTP entrypoint
+- Find the scheduled task function
+- Trace from the cron trigger through all operations
+- The entry point is a time-based trigger
 
 **For webhook flows**:
-- Tell the flow-tracer to find the webhook handler route AND its signature verification logic
-- Trace the full event processing: signature check, event type dispatch, business logic per event type, DB updates
-- The entry point is an external service callback, not a user-initiated request
+- Find the webhook handler route AND its signature verification logic
+- Trace the full event processing
 
 **For poller flows**:
-- Tell the flow-tracer to find the polling loop/interval function
-- Trace from the poll trigger through the external API call, response processing, and any DB/queue operations
-- The entry point is a timer/interval, not an HTTP entrypoint
+- Find the polling loop/interval function
+- Trace from the poll trigger through external API call and response processing
 
 **For event flows**:
-- Tell the flow-tracer to find the event listener/subscriber registration and its handler
+- Find the event listener/subscriber registration and its handler
 - Trace from the event emission through the handler logic
-- The entry point is an internal event, not an HTTP entrypoint
-
-The flow-tracer will follow imports and function calls to build the complete flow path.
 
 ## Step 4: Update Visualization
 
-If the factory server is running, POST an updated action with the traced flow path so the user can click to simulate it:
+If the factory server is running, POST an updated action with the traced flow path:
 
 ```bash
 curl -s http://localhost:7777/api/architecture | jq '.' > /tmp/factory-current.json
@@ -84,10 +81,10 @@ curl -s http://localhost:7777/api/architecture | jq '.' > /tmp/factory-current.j
 # POST back the enriched data
 ```
 
-When creating/updating the action for the traced flow, include:
+When creating/updating the action, include:
 - `type`: the flow type (`route`, `worker`, `cron`, `webhook`, `poller`, `event`)
 - `characterType`: the matching character sprite (`RequestWorker`, `QueueWorker`, `CronWorker`, `WebhookWorker`, `PollerWorker`, `EventWorker`)
-- `description`: a creative, narrative description of what this flow does
+- `description`: a creative, narrative description
 - `context`: a rich paragraph describing the full lifecycle
 - `flowDescriptions`: station-by-station narration from the flow-tracer
 - `scenario`: best matching scenario ID
@@ -95,7 +92,7 @@ When creating/updating the action for the traced flow, include:
 ## Step 5: Report
 
 Show the user the complete trace:
-- Flow type and entry trigger (HTTP request, queue job, cron schedule, webhook callback, poll interval, or event emission)
+- Flow type and entry trigger
 - For routes: middleware chain (in order)
 - Handler function and file
 - All data store interactions (DB, cache, queue)

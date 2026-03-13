@@ -1,6 +1,8 @@
 ---
-description: "Shut down the Backend Factory visualization server"
-allowed-tools: ["Bash"]
+name: stop
+description: Shut down the Backend Factory visualization server
+disable-model-invocation: true
+allowed-tools: Bash
 ---
 
 # Backend Factory - Stop

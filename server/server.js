@@ -8,12 +8,30 @@ const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 
-const PORT = process.env.PORT || 7777;
-const STATIC_DIR = path.join(__dirname, '..', 'visualization');
+// ── Configuration ──
+const CONFIG = {
+  port: process.env.PORT || 7777,
+  host: '127.0.0.1',
+  staticDir: path.join(__dirname, '..', 'visualization'),
+  maxPayloadBytes: 5 * 1024 * 1024, // 5 MB
+  broadcastDebounceMs: 100,
+  shutdownTimeout: 2000,
+  cors: {
+    allowOrigin: '*',
+    allowMethods: 'GET, POST, OPTIONS',
+    allowHeaders: 'Content-Type',
+  },
+};
+
+const PORT = CONFIG.port;
+const STATIC_DIR = CONFIG.staticDir;
 
 let architectureData = null;
+let timelapseData = null;
 let lastUpdate = null;
 let sseClients = [];
+let broadcastDebounceTimer = null;
+const BROADCAST_DEBOUNCE_MS = CONFIG.broadcastDebounceMs;
 
 const MIME_TYPES = {
   '.html': 'text/html',
@@ -25,9 +43,9 @@ const MIME_TYPES = {
 };
 
 function corsHeaders(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Origin', CONFIG.cors.allowOrigin);
+  res.setHeader('Access-Control-Allow-Methods', CONFIG.cors.allowMethods);
+  res.setHeader('Access-Control-Allow-Headers', CONFIG.cors.allowHeaders);
 }
 
 function sendJSON(res, code, data) {
@@ -42,13 +60,128 @@ function broadcastSSE(event, data) {
   });
 }
 
+/**
+ * Debounced SSE broadcast – collapses rapid-fire updates into a single
+ * broadcast of the latest data after BROADCAST_DEBOUNCE_MS of quiet time.
+ */
+function debouncedBroadcastSSE(event, data) {
+  if (broadcastDebounceTimer) clearTimeout(broadcastDebounceTimer);
+  broadcastDebounceTimer = setTimeout(() => {
+    broadcastDebounceTimer = null;
+    broadcastSSE(event, data);
+  }, BROADCAST_DEBOUNCE_MS);
+}
+
+const MAX_PAYLOAD_BYTES = CONFIG.maxPayloadBytes;
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
-    req.on('data', chunk => body += chunk);
+    let size = 0;
+    req.on('data', chunk => {
+      size += chunk.length;
+      if (size > MAX_PAYLOAD_BYTES) {
+        req.destroy();
+        reject(new PayloadTooLargeError());
+        return;
+      }
+      body += chunk;
+    });
     req.on('end', () => resolve(body));
     req.on('error', reject);
   });
+}
+
+class PayloadTooLargeError extends Error {
+  constructor() { super('Payload exceeds 5 MB limit'); }
+}
+
+/**
+ * Strip HTML tags and encode dangerous characters to prevent XSS.
+ */
+function sanitizeString(value) {
+  if (typeof value !== 'string') return value;
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
+
+/**
+ * Recursively sanitize all string values in an object/array.
+ */
+function deepSanitize(obj) {
+  if (typeof obj === 'string') return sanitizeString(obj);
+  if (Array.isArray(obj)) return obj.map(deepSanitize);
+  if (obj !== null && typeof obj === 'object') {
+    const out = {};
+    for (const key of Object.keys(obj)) {
+      out[key] = deepSanitize(obj[key]);
+    }
+    return out;
+  }
+  return obj;
+}
+
+const VALID_NODE_TYPES = [
+  'api', 'database', 'queue', 'cache', 'service', 'gateway', 'storage',
+  'auth', 'worker', 'scheduler', 'loadbalancer', 'cdn', 'custom',
+];
+
+/**
+ * Validate the architecture payload shape and required fields.
+ * Returns null on success or an error message string on failure.
+ */
+function validateArchitecturePayload(data) {
+  if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+    return 'Payload must be a JSON object';
+  }
+
+  // --- nodes ---
+  if (!Array.isArray(data.nodes)) {
+    return 'Missing or invalid "nodes" array';
+  }
+  for (let i = 0; i < data.nodes.length; i++) {
+    const n = data.nodes[i];
+    if (n === null || typeof n !== 'object' || Array.isArray(n)) {
+      return `nodes[${i}] must be an object`;
+    }
+    if (typeof n.id !== 'string' || n.id.trim() === '') {
+      return `nodes[${i}] is missing a valid "id" string`;
+    }
+    if (typeof n.type !== 'string' || n.type.trim() === '') {
+      return `nodes[${i}] is missing a valid "type" string`;
+    }
+    if (typeof n.label !== 'string' || n.label.trim() === '') {
+      return `nodes[${i}] is missing a valid "label" string`;
+    }
+  }
+
+  // --- edges ---
+  if (!Array.isArray(data.edges)) {
+    return 'Missing or invalid "edges" array';
+  }
+
+  // --- actions ---
+  if (!Array.isArray(data.actions)) {
+    return 'Missing or invalid "actions" array';
+  }
+
+  // --- validate action.flow references ---
+  const nodeIds = new Set((data.nodes || []).map(n => n.id));
+  for (let i = 0; i < (data.actions || []).length; i++) {
+    const action = data.actions[i];
+    if (!Array.isArray(action.flow)) continue;
+    for (const nodeId of action.flow) {
+      if (!nodeIds.has(nodeId)) {
+        return `actions[${i}] references non-existent node "${nodeId}" in flow`;
+      }
+    }
+  }
+
+  return null; // valid
 }
 
 function serveStatic(req, res) {
@@ -65,6 +198,9 @@ function serveStatic(req, res) {
   fs.readFile(resolved, (err, data) => {
     if (err) { sendJSON(res, 404, { error: 'Not found' }); return; }
     const ext = path.extname(resolved);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
     res.writeHead(200, { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' });
     res.end(data);
   });
@@ -79,6 +215,7 @@ const server = http.createServer(async (req, res) => {
 
   // GET /api/architecture
   if (urlPath === '/api/architecture' && req.method === 'GET') {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     sendJSON(res, 200, architectureData || { nodes: [], edges: [], actions: [] });
     return;
   }
@@ -87,12 +224,30 @@ const server = http.createServer(async (req, res) => {
   if (urlPath === '/api/architecture' && req.method === 'POST') {
     try {
       const body = await readBody(req);
-      architectureData = JSON.parse(body);
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        sendJSON(res, 400, { error: 'Request body is not valid JSON' });
+        return;
+      }
+
+      const validationError = validateArchitecturePayload(parsed);
+      if (validationError) {
+        sendJSON(res, 400, { error: validationError });
+        return;
+      }
+
+      architectureData = deepSanitize(parsed);
       lastUpdate = new Date().toISOString();
-      broadcastSSE('architecture_updated', architectureData);
+      debouncedBroadcastSSE('architecture_updated', architectureData);
       sendJSON(res, 200, { success: true, lastUpdate });
-    } catch {
-      sendJSON(res, 400, { error: 'Invalid JSON' });
+    } catch (err) {
+      if (err instanceof PayloadTooLargeError) {
+        sendJSON(res, 413, { error: err.message });
+      } else {
+        sendJSON(res, 400, { error: 'Invalid request' });
+      }
     }
     return;
   }
@@ -110,6 +265,104 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // GET /api/export/mermaid
+  if (urlPath === '/api/export/mermaid' && req.method === 'GET') {
+    const data = architectureData || { nodes: [], edges: [], actions: [] };
+    const lines = ['flowchart TD'];
+
+    function mermaidId(id) {
+      return id.replace(/[^a-zA-Z0-9_-]/g, '_');
+    }
+
+    function mermaidLabel(str) {
+      return (str || '').replace(/"/g, '#quot;').replace(/[[\](){}|<>]/g, ' ');
+    }
+
+    const shapeMap = {
+      database:      (id, l) => `  ${id}[(${l})]`,
+      cache:         (id, l) => `  ${id}[(${l})]`,
+      queue:         (id, l) => `  ${id}([${l}])`,
+      entrypoint:    (id, l) => `  ${id}(((${l})))`,
+      exit:          (id, l) => `  ${id}(((${l})))`,
+      middleware:    (id, l) => `  ${id}{{${l}}}`,
+      auth:          (id, l) => `  ${id}{{${l}}}`,
+      ratelimit:     (id, l) => `  ${id}{{${l}}}`,
+      error_handler: (id, l) => `  ${id}{{${l}}}`,
+      route:         (id, l) => `  ${id}[${l}]`,
+      service:       (id, l) => `  ${id}[${l}]`,
+      websocket:     (id, l) => `  ${id}([${l}])`,
+    };
+
+    (data.nodes || []).forEach(n => {
+      const mid = mermaidId(n.id);
+      const label = mermaidLabel(n.name || n.label || n.id);
+      const shapeFn = shapeMap[n.type] || ((id, l) => `  ${id}[${l}]`);
+      lines.push(shapeFn(mid, label));
+    });
+
+    const edgeLabelMap = {
+      request_flow: '',
+      middleware_chain: 'middleware',
+      data_access: 'data',
+      message_publish: 'publish',
+      error_flow: 'error',
+    };
+
+    (data.edges || []).forEach(e => {
+      const src = mermaidId(e.source);
+      const tgt = mermaidId(e.target);
+      const label = edgeLabelMap[e.type] || e.type || '';
+      if (label) {
+        lines.push(`  ${src} -->|${mermaidLabel(label)}| ${tgt}`);
+      } else {
+        lines.push(`  ${src} --> ${tgt}`);
+      }
+    });
+
+    const mermaidText = lines.join('\n');
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end(mermaidText);
+    return;
+  }
+
+  // GET /api/timelapse — return stored timelapse data
+  if (urlPath === '/api/timelapse' && req.method === 'GET') {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    sendJSON(res, 200, timelapseData || []);
+    return;
+  }
+
+  // POST /api/timelapse — accept and store timelapse snapshots, broadcast SSE
+  if (urlPath === '/api/timelapse' && req.method === 'POST') {
+    try {
+      const body = await readBody(req);
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        sendJSON(res, 400, { error: 'Request body is not valid JSON' });
+        return;
+      }
+
+      if (!Array.isArray(parsed)) {
+        sendJSON(res, 400, { error: 'Timelapse payload must be a JSON array' });
+        return;
+      }
+
+      timelapseData = deepSanitize(parsed);
+      lastUpdate = new Date().toISOString();
+      debouncedBroadcastSSE('timelapse_updated', timelapseData);
+      sendJSON(res, 200, { success: true, snapshots: timelapseData.length, lastUpdate });
+    } catch (err) {
+      if (err instanceof PayloadTooLargeError) {
+        sendJSON(res, 413, { error: err.message });
+      } else {
+        sendJSON(res, 400, { error: 'Invalid request' });
+      }
+    }
+    return;
+  }
+
   // GET /api/status
   if (urlPath === '/api/status' && req.method === 'GET') {
     sendJSON(res, 200, { status: 'running', lastUpdate, clients: sseClients.length });
@@ -119,7 +372,7 @@ const server = http.createServer(async (req, res) => {
   serveStatic(req, res);
 });
 
-server.listen(PORT, '127.0.0.1', () => {
+server.listen(PORT, CONFIG.host, () => {
   console.log(`\n  ╔══════════════════════════════════════╗`);
   console.log(`  ║   BACKEND FACTORY v1.0               ║`);
   console.log(`  ║   Running at http://localhost:${PORT}   ║`);
@@ -132,9 +385,10 @@ server.listen(PORT, '127.0.0.1', () => {
 
 function shutdown() {
   console.log('\nShutting down Backend Factory...');
+  if (broadcastDebounceTimer) clearTimeout(broadcastDebounceTimer);
   sseClients.forEach(c => { try { c.end(); } catch {} });
   server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 2000);
+  setTimeout(() => process.exit(0), CONFIG.shutdownTimeout);
 }
 
 process.on('SIGTERM', shutdown);
