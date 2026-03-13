@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Backend Factory</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <div id="canvas-container">
+      <canvas id="factory-canvas"></canvas>
+    </div>
+    <div id="panel">
+      <div id="panel-header">
+        <h1>BACKEND<br>FACTORY</h1>
+        <div class="subtitle">ARCHITECTURE VISUALIZER</div>
+      </div>
+
+      <div id="status-bar">
+        <div class="status-row">
+          <span class="status-dot disconnected" id="status-dot"></span>
+          <span id="status-text">Disconnected</span>
+        </div>
+        <div class="status-row">
+          <span style="color: var(--text-dim)">Last scan:</span>
+          <span id="last-scan" style="color: var(--text-amber)">Never</span>
+        </div>
+      </div>
+
+      <div id="framework-badge">
+        <span id="framework-name">No framework detected</span>
+      </div>
+
+      <div id="actions-section">
+        <h2>▸ ACTIONS</h2>
+        <div id="action-buttons">
+          <div class="no-data">
+            Run /factory-analyze<br>to scan your backend<br><br>
+            Waiting for<br>architecture data...
+          </div>
+        </div>
+        <button class="btn btn-simulate-all" id="btn-simulate-all" style="display:none">
+          ▶ SIMULATE ALL
+        </button>
+        <button class="btn btn-auto" id="btn-auto-sim" style="display:none">
+          ⟳ AUTO-SIM: OFF
+        </button>
+        <button class="btn btn-edit" id="btn-edit-mode" style="display:none">
+          ✎ EDIT MODE
+        </button>
+        <div id="speed-control" style="display:none; padding: 8px 12px; border-top: 1px solid #1a3a2a;">
+          <label style="font-size: 9px; color: #557766; text-transform: uppercase; letter-spacing: 1px;">Station Dwell Speed</label>
+          <div style="display: flex; align-items: center; gap: 6px; margin-top: 4px;">
+            <span style="font-size: 8px; color: #446655;">Slow</span>
+            <input type="range" id="dwell-slider" min="0" max="100" value="50"
+              style="flex: 1; height: 4px; accent-color: #33ff99; cursor: pointer;">
+            <span style="font-size: 8px; color: #446655;">Fast</span>
+          </div>
+        </div>
+      </div>
+
+      <div id="stats-footer">
+        <div class="stat-item">
+          <span>Routes</span>
+          <span class="stat-value" id="stat-routes">0</span>
+        </div>
+        <div class="stat-item">
+          <span>Middleware</span>
+          <span class="stat-value" id="stat-middleware">0</span>
+        </div>
+        <div class="stat-item">
+          <span>Database</span>
+          <span class="stat-value" id="stat-database">0</span>
+        </div>
+        <div class="stat-item">
+          <span>Cache</span>
+          <span class="stat-value" id="stat-cache">0</span>
+        </div>
+        <div class="stat-item">
+          <span>Queues</span>
+          <span class="stat-value" id="stat-queue">0</span>
+        </div>
+        <div class="stat-item">
+          <span>Total</span>
+          <span class="stat-value" id="stat-total">0</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="characters.js"></script>
+  <script src="scenarios.js"></script>
+  <script src="factory.js"></script>
+  <script>
+    (function() {
+      'use strict';
+
+      const API_BASE = 'http://localhost:7777';
+      let eventSource = null;
+
+      // ── Initialize Factory ──
+      const canvas = document.getElementById('factory-canvas');
+      window.Factory.init(canvas);
+
+      window.addEventListener('resize', () => window.Factory.resize());
+
+      // ── Connect to server ──
+      function connect() {
+        // Fetch initial architecture
+        fetch(API_BASE + '/api/architecture')
+          .then(r => r.json())
+          .then(data => {
+            if (data && data.nodes) {
+              loadArchitecture(data);
+            }
+            setConnected(true);
+          })
+          .catch(() => setConnected(false));
+
+        // SSE for live updates
+        if (eventSource) eventSource.close();
+        eventSource = new EventSource(API_BASE + '/api/events');
+        eventSource.onopen = () => setConnected(true);
+        eventSource.onerror = () => {
+          setConnected(false);
+          setTimeout(connect, 5000);
+        };
+        eventSource.addEventListener('architecture_updated', (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            loadArchitecture(data);
+          } catch (err) {
+            console.error('Failed to parse architecture update:', err);
+          }
+        });
+      }
+
+      function setConnected(connected) {
+        const dot = document.getElementById('status-dot');
+        const text = document.getElementById('status-text');
+        dot.className = 'status-dot ' + (connected ? 'connected' : 'disconnected');
+        text.textContent = connected ? 'Connected' : 'Disconnected';
+      }
+
+      // ── Load Architecture Data ──
+      function loadArchitecture(data) {
+        window.Factory.loadArchitecture(data);
+        updatePanel(data);
+        document.getElementById('last-scan').textContent =
+          new Date(data.timestamp || Date.now()).toLocaleTimeString();
+      }
+
+      function updatePanel(data) {
+        // Framework
+        document.getElementById('framework-name').textContent =
+          (data.framework || 'Unknown').toUpperCase() + ' DETECTED';
+
+        // Stats
+        const counts = {};
+        (data.nodes || []).forEach(n => {
+          counts[n.type] = (counts[n.type] || 0) + 1;
+        });
+        document.getElementById('stat-routes').textContent = counts.route || 0;
+        document.getElementById('stat-middleware').textContent = counts.middleware || 0;
+        document.getElementById('stat-database').textContent = counts.database || 0;
+        document.getElementById('stat-cache').textContent = counts.cache || 0;
+        document.getElementById('stat-queue').textContent = counts.queue || 0;
+        document.getElementById('stat-total').textContent = (data.nodes || []).length;
+
+        // Action buttons
+        const container = document.getElementById('action-buttons');
+        container.innerHTML = '';
+
+        if (data.actions && data.actions.length > 0) {
+          // Action type icons and labels
+          var ACTION_ICONS = {
+            'route': '', 'worker': '⚡', 'cron': '🕐',
+            'webhook': '📬', 'poller': '📡', 'event': '👂'
+          };
+
+          data.actions.forEach(action => {
+            const btn = document.createElement('button');
+            btn.className = 'btn';
+
+            var actionType = action.type || 'route';
+            var icon = ACTION_ICONS[actionType] || '';
+
+            if (actionType === 'route') {
+              // Parse method from description for routes
+              var methodMatch = (action.description || '').match(/^(GET|POST|PUT|DELETE|PATCH)/);
+              var method = methodMatch ? methodMatch[1] : 'MW';
+              var path = (action.description || action.name).replace(/^(GET|POST|PUT|DELETE|PATCH)\s*/, '');
+              btn.innerHTML =
+                '<span class="method ' + method + '">' + method + '</span>' +
+                '<span>' + escapeHtml(path) + '</span>';
+            } else {
+              // Non-route actions get their icon + creative description
+              var label = action.description || action.name;
+              btn.innerHTML =
+                '<span class="method MW">' + icon + '</span>' +
+                '<span>' + escapeHtml(label) + '</span>';
+            }
+
+            btn.title = action.context || action.name;
+            btn.addEventListener('click', () => {
+              window.Factory.simulateRequest(action.id || action.routeId);
+            });
+            container.appendChild(btn);
+          });
+
+          document.getElementById('btn-simulate-all').style.display = 'block';
+          document.getElementById('btn-auto-sim').style.display = 'block';
+          document.getElementById('btn-edit-mode').style.display = 'block';
+          document.getElementById('speed-control').style.display = 'block';
+        } else {
+          container.innerHTML = '<div class="no-data">No actions detected</div>';
+          document.getElementById('btn-simulate-all').style.display = 'none';
+          document.getElementById('btn-auto-sim').style.display = 'none';
+          document.getElementById('btn-edit-mode').style.display = 'none';
+          document.getElementById('speed-control').style.display = 'none';
+        }
+      }
+
+      function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+      }
+
+      // ── Simulate All Button ──
+      document.getElementById('btn-simulate-all').addEventListener('click', () => {
+        window.Factory.simulateAll();
+      });
+
+      // ── Auto-Simulation: randomly trigger routes ──
+      let autoSimInterval = null;
+      document.getElementById('btn-auto-sim').addEventListener('click', () => {
+        const btn = document.getElementById('btn-auto-sim');
+        if (autoSimInterval) {
+          clearInterval(autoSimInterval);
+          autoSimInterval = null;
+          btn.textContent = '⟳ AUTO-SIM: OFF';
+          btn.style.borderColor = '';
+        } else {
+          autoSimInterval = setInterval(() => {
+            if (!window.Factory.architecture || !window.Factory.architecture.actions) return;
+            const actions = window.Factory.architecture.actions;
+            const action = actions[Math.floor(Math.random() * actions.length)];
+            window.Factory.simulateRequest(action.id || action.routeId);
+          }, 2500 + Math.random() * 3000); // Random interval 2.5-5.5s
+          btn.textContent = '⟳ AUTO-SIM: ON';
+          btn.style.borderColor = 'var(--accent-green)';
+        }
+      });
+
+      // ── Edit Mode Toggle ──
+      document.getElementById('btn-edit-mode').addEventListener('click', () => {
+        const active = window.Factory.toggleEditMode();
+        const btn = document.getElementById('btn-edit-mode');
+        btn.textContent = active ? '✎ EDIT: ON' : '✎ EDIT MODE';
+        btn.style.borderColor = active ? 'var(--accent-red)' : '';
+      });
+
+      // ── Dwell Speed Slider ──
+      document.getElementById('dwell-slider').addEventListener('input', (e) => {
+        if (window.setDwellSpeed) window.setDwellSpeed(parseInt(e.target.value));
+      });
+
+      // ── Start connection ──
+      connect();
+
+      // Retry connection every 5 seconds if not connected
+      setInterval(() => {
+        const dot = document.getElementById('status-dot');
+        if (dot.classList.contains('disconnected')) {
+          connect();
+        }
+      }, 5000);
+
+    })();
+  </script>
+</body>
+</html>

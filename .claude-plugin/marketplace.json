@@ -1,0 +1,15 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "backend-factory",
+  "owner": {
+    "name": "Randy Quaye"
+  },
+  "plugins": [
+    {
+      "name": "backend-factory",
+      "source": "./",
+      "description": "Visualize any backend architecture as an animated retro pixel-art factory with worker characters showing request flows.",
+      "version": "1.0.0"
+    }
+  ]
+}
