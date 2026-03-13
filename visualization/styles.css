@@ -214,7 +214,7 @@ body::after {
   font-size: 7px;
   text-align: left;
   cursor: pointer;
-  transition: none;
+  transition: all 0.15s ease;
   line-height: 1.4;
 }
 
@@ -227,6 +227,16 @@ body::after {
 .btn:active {
   background: var(--btn-active);
   box-shadow: inset 2px 2px 0 rgba(0, 0, 0, 0.5);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
+}
+
+summary:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
 }
 
 .btn .method {

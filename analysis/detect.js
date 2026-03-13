@@ -131,7 +131,7 @@ function detectFramework(projectPath) {
         return { framework: 'express', language: 'javascript', meta: { packageName: pkg.name || path.basename(projectPath) } };
       }
       if (allDeps['fastify']) {
-        return { framework: 'express', language: 'javascript', meta: { packageName: pkg.name || path.basename(projectPath) } };
+        return { framework: 'fastify', language: 'javascript', meta: { packageName: pkg.name || path.basename(projectPath) } };
       }
     } catch {}
   }
@@ -256,6 +256,22 @@ PATTERNS.hono = {
   webhooks:      { pattern: 'webhook|WEBHOOK_SECRET|svix|stripe\\.webhooks|verifyWebhook', globs: ['ts', 'js', 'mjs'] },
 };
 
+// Fastify patterns
+PATTERNS.fastify = {
+  routes:        { pattern: '(fastify|server|app)\\.(get|post|put|delete|patch|all|route)\\s*\\(', globs: ['js', 'ts', 'mjs'] },
+  middleware:     { pattern: '(fastify|server|app)\\.(register|addHook|decorate|use)\\s*\\(', globs: ['js', 'ts', 'mjs'] },
+  database:      { pattern: 'drizzle|prisma|sequelize|knex|typeorm|pg\\.Pool|mongoose|mongodb|Pool\\(', globs: ['js', 'ts', 'mjs'] },
+  cache:         { pattern: 'redis|ioredis|node-cache|memcached|Redis\\(', globs: ['js', 'ts', 'mjs'] },
+  queues:        { pattern: 'bull|bullmq|BullMQ|Queue\\(|Worker\\(|amqplib|bee-queue', globs: ['js', 'ts', 'mjs'] },
+  auth:          { pattern: 'fastify-jwt|fastify-auth|jsonwebtoken|jwt\\.sign|jwt\\.verify|bcrypt|passport|OAuth2', globs: ['js', 'ts', 'mjs'] },
+  rateLimit:     { pattern: 'fastify-rate-limit|rateLimit|rateLimiter', globs: ['js', 'ts', 'mjs'] },
+  errorHandlers: { pattern: 'setErrorHandler|fastify\\.setErrorHandler|onError', globs: ['js', 'ts', 'mjs'] },
+  websocket:     { pattern: 'fastify-websocket|@fastify/websocket|socket\\.io|ws\\.Server|WebSocket', globs: ['js', 'ts', 'mjs'] },
+  workers:       { pattern: 'new Worker\\(|process\\(|Worker\\(.*\\{', globs: ['js', 'ts', 'mjs'] },
+  cron:          { pattern: 'cron|node-cron|agenda|setInterval.*fetch|schedule', globs: ['js', 'ts', 'mjs'] },
+  webhooks:      { pattern: 'webhook|WEBHOOK_SECRET|svix|stripe\\.webhooks', globs: ['js', 'ts', 'mjs'] },
+};
+
 // Use flask patterns as fallback for fastapi too
 PATTERNS.fastapi = { ...PATTERNS.flask, ...PATTERNS.fastapi };
 
@@ -311,11 +327,11 @@ function parseMatch(category, match, framework) {
   const line = match.content;
 
   if (category === 'routes') {
-    if (framework === 'express' || framework === 'hono') {
-      const rm = line.match(/(?:app|router|api)\.(get|post|put|delete|patch|all)\s*\(\s*['"`]([^'"`]+)['"`]/i);
+    if (framework === 'express' || framework === 'hono' || framework === 'fastify') {
+      const rm = line.match(/(?:app|router|api|fastify|server)\.(get|post|put|delete|patch|all)\s*\(\s*['"`]([^'"`]+)['"`]/i);
       if (rm) { meta.method = rm[1].toUpperCase(); meta.path = rm[2]; }
-      const hm = line.match(/['"`][^'"`]+['"`]\s*,\s*([A-Za-z_]\w*)/);
-      if (hm) meta.handler = hm[1];
+      const hm = line.match(/['"`][^'"`]+['"`]\s*,\s*(?:async\s+)?([A-Za-z_]\w*)(?:\s*[,(])/);
+      if (hm && hm[1] !== 'async' && hm[1] !== 'function') meta.handler = hm[1];
       // Hono .route() mounting
       const routeMount = line.match(/\.route\s*\(\s*['"`]([^'"`]+)['"`]/);
       if (routeMount) { meta.method = 'MOUNT'; meta.path = routeMount[1]; }

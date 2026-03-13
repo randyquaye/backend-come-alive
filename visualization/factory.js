@@ -524,6 +524,16 @@
     // ═══════════════════════════════════════════
 
     loadArchitecture(data) {
+      if (this._archUpdateTimer) clearTimeout(this._archUpdateTimer);
+      const hasActiveChars = this.characters && this.characters.some(c => !c.done);
+      if (hasActiveChars) {
+        this._archUpdateTimer = setTimeout(() => this._applyArchitecture(data), 300);
+        return;
+      }
+      this._applyArchitecture(data);
+    }
+
+    _applyArchitecture(data) {
       this.architecture = data;
       this.stations = {};
       this.paths = [];
@@ -592,13 +602,15 @@
           const tgtId = edge.target || edge.to;
           const src = this.stations[srcId];
           const tgt = this.stations[tgtId];
-          if (src && tgt) {
-            this.paths.push({
-              edge: edge,
-              from: { x: src.x + STATION_WIDTH, y: src.centerY },
-              to: { x: tgt.x, y: tgt.centerY },
-            });
+          if (!src || !tgt) {
+            console.warn(`[factory] Orphaned edge: ${srcId} → ${tgtId}`);
+            return;
           }
+          this.paths.push({
+            edge: edge,
+            from: { x: src.x + STATION_WIDTH, y: src.centerY },
+            to: { x: tgt.x, y: tgt.centerY },
+          });
         });
       }
 
@@ -985,9 +997,20 @@
       // Draw conveyor paths
       this._drawConveyors(ctx);
 
+      // Build per-station character lookup (once per frame)
+      const charsByStation = new Map();
+      this.characters.forEach(c => {
+        if (c.state === 'action' && c.path[c.pathIndex]) {
+          const sid = c.path[c.pathIndex].stationId;
+          if (!charsByStation.has(sid)) charsByStation.set(sid, []);
+          charsByStation.get(sid).push(c);
+        }
+      });
+      const drawTime = Date.now();
+
       // Draw stations
       Object.values(this.stations).forEach(station => {
-        this._drawStation(ctx, station);
+        this._drawStation(ctx, station, charsByStation, drawTime);
       });
 
       // Draw characters
@@ -1057,6 +1080,7 @@
         const dotSpacing = 12;
         const numDots = Math.floor(totalLen / dotSpacing);
 
+        ctx.globalAlpha = 0.4;
         for (let i = 0; i < numDots; i++) {
           let t = ((i * dotSpacing + this.conveyorOffset) % totalLen) / totalLen;
           let px, py;
@@ -1078,28 +1102,23 @@
             py = to.y;
           }
 
-          ctx.globalAlpha = 0.4;
           ctx.fillRect(Math.round(px) - 1, Math.round(py) - 1, 2, 2);
         }
         ctx.globalAlpha = 1;
       });
     }
 
-    _drawStation(ctx, station) {
+    _drawStation(ctx, station, charsByStation, t) {
       const { x, y, node } = station;
       const style = STATION_STYLES[node.type] || STATION_STYLES.service;
       const meta = node.metadata || {};
-      const t = Date.now();
       const W = STATION_WIDTH;
       const H = STATION_HEIGHT;
       const cx = x + W / 2;
       const cy = y + H / 2;
 
-      // Determine active characters at this station
-      const activeChars = this.characters.filter(c =>
-        c.state === 'action' && c.path[c.pathIndex] &&
-        c.path[c.pathIndex].stationId === node.id
-      );
+      // Determine active characters at this station (pre-cached)
+      const activeChars = charsByStation ? (charsByStation.get(node.id) || []) : [];
       const isActive = activeChars.length > 0;
 
       // ── Common background ──

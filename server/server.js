@@ -168,6 +168,18 @@ function validateArchitecturePayload(data) {
     return 'Missing or invalid "actions" array';
   }
 
+  // --- validate action.flow references ---
+  const nodeIds = new Set((data.nodes || []).map(n => n.id));
+  for (let i = 0; i < (data.actions || []).length; i++) {
+    const action = data.actions[i];
+    if (!Array.isArray(action.flow)) continue;
+    for (const nodeId of action.flow) {
+      if (!nodeIds.has(nodeId)) {
+        return `actions[${i}] references non-existent node "${nodeId}" in flow`;
+      }
+    }
+  }
+
   return null; // valid
 }
 
@@ -185,6 +197,9 @@ function serveStatic(req, res) {
   fs.readFile(resolved, (err, data) => {
     if (err) { sendJSON(res, 404, { error: 'Not found' }); return; }
     const ext = path.extname(resolved);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
     res.writeHead(200, { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' });
     res.end(data);
   });
@@ -199,6 +214,7 @@ const server = http.createServer(async (req, res) => {
 
   // GET /api/architecture
   if (urlPath === '/api/architecture' && req.method === 'GET') {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     sendJSON(res, 200, architectureData || { nodes: [], edges: [], actions: [] });
     return;
   }
@@ -211,7 +227,7 @@ const server = http.createServer(async (req, res) => {
       try {
         parsed = JSON.parse(body);
       } catch {
-        sendJSON(res, 400, { error: 'Invalid JSON: body is not valid JSON' });
+        sendJSON(res, 400, { error: 'Request body is not valid JSON' });
         return;
       }
 
